@@ -14,13 +14,13 @@ panic-probe = { version = "0.3", features = ["print-defmt"] }
 
 # We're using a Pico by default on this template
 rp-pico = "0.5"
-
-# but you can use any BSP. Uncomment this to use the pro_micro_rp2040 BSP instead
-# sparkfun-pro-micro-rp2040 = "0.3"
-
-# If you're not going to use a Board Support Package you'll need these:
-# rp2040-hal = { version="0.6", features=["rt"] }
-# rp2040-boot2 = "0.2"
+rp2040-pac = { git = "https://github.com/rp-rs/rp2040-pac", branch="main" }
+rp2040-boot2 = "0.2.1"
+panic-halt = "0.2.0"
+usb-device = "0.2.9"
+usbd-hid = "0.6.0"
+critical-section = "1.1.0"
+rp2040-hal = { version="0.6", features=["rt"] }
 
 # cargo build/run
 [profile.dev]

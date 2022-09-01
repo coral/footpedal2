@@ -1,39 +1,64 @@
-//! Blinks the LED on a Pico board
-//!
-//! This will blink an LED attached to GP25, which is the pin the Pico uses for the on-board LED.
 #![no_std]
 #![no_main]
 
-use bsp::entry;
-use defmt::*;
-use defmt_rtt as _;
-use embedded_hal::digital::v2::OutputPin;
-use panic_probe as _;
+// The macro for our start-up function
+use rp_pico::entry;
 
-// Provide an alias for our BSP so we can switch targets quickly.
-// Uncomment the BSP you included in Cargo.toml, the rest of the code does not need to change.
-use rp_pico as bsp;
-// use sparkfun_pro_micro_rp2040 as bsp;
+// The macro for marking our interrupt functions
+use rp_pico::hal::pac::interrupt;
 
-use bsp::hal::{
-    clocks::{init_clocks_and_plls, Clock},
-    pac,
-    sio::Sio,
-    watchdog::Watchdog,
-};
+// Ensure we halt the program on panic (if we don't mention this crate it won't
+// be linked)
+use panic_halt as _;
 
+// Pull in any important traits
+use rp_pico::hal::prelude::*;
+
+// A shorter alias for the Peripheral Access Crate, which provides low-level
+// register access
+use rp_pico::hal::pac;
+
+// A shorter alias for the Hardware Abstraction Layer, which provides
+// higher-level drivers.
+use rp_pico::hal;
+
+// USB Device support
+use usb_device::{class_prelude::*, prelude::*};
+
+// USB Human Interface Device (HID) Class support
+use usbd_hid::descriptor::generator_prelude::*;
+use usbd_hid::descriptor::MouseReport;
+use usbd_hid::hid_class::HIDClass;
+
+/// The USB Device Driver (shared with the interrupt).
+static mut USB_DEVICE: Option<UsbDevice<hal::usb::UsbBus>> = None;
+
+/// The USB Bus Driver (shared with the interrupt).
+static mut USB_BUS: Option<UsbBusAllocator<hal::usb::UsbBus>> = None;
+
+/// The USB Human Interface Device Driver (shared with the interrupt).
+static mut USB_HID: Option<HIDClass<hal::usb::UsbBus>> = None;
+
+/// Entry point to our bare-metal application.
+///
+/// The `#[entry]` macro ensures the Cortex-M start-up code calls this function
+/// as soon as all global variables are initialised.
+///
+/// The function configures the RP2040 peripherals, then submits cursor movement
+/// updates periodically.
 #[entry]
 fn main() -> ! {
-    info!("Program start");
+    // Grab our singleton objects
     let mut pac = pac::Peripherals::take().unwrap();
-    let core = pac::CorePeripherals::take().unwrap();
-    let mut watchdog = Watchdog::new(pac.WATCHDOG);
-    let sio = Sio::new(pac.SIO);
 
-    // External high-speed crystal on the pico board is 12Mhz
-    let external_xtal_freq_hz = 12_000_000u32;
-    let clocks = init_clocks_and_plls(
-        external_xtal_freq_hz,
+    // Set up the watchdog driver - needed by the clock setup code
+    let mut watchdog = hal::Watchdog::new(pac.WATCHDOG);
+
+    // Configure the clocks
+    //
+    // The default is to generate a 125 MHz system clock
+    let clocks = hal::clocks::init_clocks_and_plls(
+        rp_pico::XOSC_CRYSTAL_FREQ,
         pac.XOSC,
         pac.CLOCKS,
         pac.PLL_SYS,
@@ -44,25 +69,106 @@ fn main() -> ! {
     .ok()
     .unwrap();
 
+    #[cfg(feature = "rp2040-e5")]
+    {
+        let sio = hal::Sio::new(pac.SIO);
+        let _pins = rp_pico::Pins::new(
+            pac.IO_BANK0,
+            pac.PADS_BANK0,
+            sio.gpio_bank0,
+            &mut pac.RESETS,
+        );
+    }
+
+    // Set up the USB driver
+    let usb_bus = UsbBusAllocator::new(hal::usb::UsbBus::new(
+        pac.USBCTRL_REGS,
+        pac.USBCTRL_DPRAM,
+        clocks.usb_clock,
+        true,
+        &mut pac.RESETS,
+    ));
+    unsafe {
+        // Note (safety): This is safe as interrupts haven't been started yet
+        USB_BUS = Some(usb_bus);
+    }
+
+    // Grab a reference to the USB Bus allocator. We are promising to the
+    // compiler not to take mutable access to this global variable whilst this
+    // reference exists!
+    let bus_ref = unsafe { USB_BUS.as_ref().unwrap() };
+
+    // Set up the USB HID Class Device driver, providing Mouse Reports
+    let usb_hid = HIDClass::new(bus_ref, MouseReport::desc(), 60);
+    unsafe {
+        // Note (safety): This is safe as interrupts haven't been started yet.
+        USB_HID = Some(usb_hid);
+    }
+
+    // Create a USB device with a fake VID and PID
+    let usb_dev = UsbDeviceBuilder::new(bus_ref, UsbVidPid(0x16c0, 0x27da))
+        .manufacturer("Fake company")
+        .product("Twitchy Mousey")
+        .serial_number("TEST")
+        .device_class(0)
+        .build();
+    unsafe {
+        // Note (safety): This is safe as interrupts haven't been started yet
+        USB_DEVICE = Some(usb_dev);
+    }
+
+    unsafe {
+        // Enable the USB interrupt
+        pac::NVIC::unmask(hal::pac::Interrupt::USBCTRL_IRQ);
+    };
+    let core = pac::CorePeripherals::take().unwrap();
     let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
 
-    let pins = bsp::Pins::new(
-        pac.IO_BANK0,
-        pac.PADS_BANK0,
-        sio.gpio_bank0,
-        &mut pac.RESETS,
-    );
-
-    let mut led_pin = pins.led.into_push_pull_output();
-
+    // Move the cursor up and down every 200ms
     loop {
-        info!("on!");
-        led_pin.set_high().unwrap();
-        delay.delay_ms(500);
-        info!("off!");
-        led_pin.set_low().unwrap();
-        delay.delay_ms(500);
+        delay.delay_ms(100);
+
+        let rep_up = MouseReport {
+            x: 0,
+            y: 4,
+            buttons: 0,
+            wheel: 0,
+            pan: 0,
+        };
+        push_mouse_movement(rep_up).ok().unwrap_or(0);
+
+        delay.delay_ms(100);
+
+        let rep_down = MouseReport {
+            x: 0,
+            y: -4,
+            buttons: 0,
+            wheel: 0,
+            pan: 0,
+        };
+        push_mouse_movement(rep_down).ok().unwrap_or(0);
     }
 }
 
-// End of file
+/// Submit a new mouse movement report to the USB stack.
+///
+/// We do this with interrupts disabled, to avoid a race hazard with the USB IRQ.
+fn push_mouse_movement(report: MouseReport) -> Result<usize, usb_device::UsbError> {
+    critical_section::with(|_| unsafe {
+        // Now interrupts are disabled, grab the global variable and, if
+        // available, send it a HID report
+        USB_HID.as_mut().map(|hid| hid.push_input(&report))
+    })
+    .unwrap()
+}
+
+/// This function is called whenever the USB Hardware generates an Interrupt
+/// Request.
+#[allow(non_snake_case)]
+#[interrupt]
+unsafe fn USBCTRL_IRQ() {
+    // Handle USB request
+    let usb_dev = USB_DEVICE.as_mut().unwrap();
+    let usb_hid = USB_HID.as_mut().unwrap();
+    usb_dev.poll(&mut [usb_hid]);
+}
