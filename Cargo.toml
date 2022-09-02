@@ -1,6 +1,6 @@
 [package]
 edition = "2021"
-name = "rp2040-project-template"
+name = "footpedal2"
 version = "0.1.0"
 
 [dependencies]
@@ -12,7 +12,6 @@ defmt = "0.3"
 defmt-rtt = "0.3"
 panic-probe = { version = "0.3", features = ["print-defmt"] }
 
-# We're using a Pico by default on this template
 rp-pico = "0.5"
 rp2040-pac = { git = "https://github.com/rp-rs/rp2040-pac", branch="main" }
 rp2040-boot2 = "0.2.1"
@@ -21,6 +20,8 @@ usb-device = "0.2.9"
 usbd-hid = "0.6.0"
 critical-section = "1.1.0"
 rp2040-hal = { version="0.6", features=["rt"] }
+thiserror = "1.0.33"
+fugit = "0.3.6"
 
 # cargo build/run
 [profile.dev]

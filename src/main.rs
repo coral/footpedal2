@@ -1,52 +1,74 @@
 #![no_std]
 #![no_main]
 
-// The macro for our start-up function
-use rp_pico::entry;
-
-// The macro for marking our interrupt functions
-use rp_pico::hal::pac::interrupt;
-
+use hal::clocks::ValidSrc;
 // Ensure we halt the program on panic (if we don't mention this crate it won't
 // be linked)
 use panic_halt as _;
 
-// Pull in any important traits
-use rp_pico::hal::prelude::*;
+// Alias for our HAL crate
+use rp2040_hal as hal;
 
 // A shorter alias for the Peripheral Access Crate, which provides low-level
 // register access
-use rp_pico::hal::pac;
+use hal::pac;
 
-// A shorter alias for the Hardware Abstraction Layer, which provides
-// higher-level drivers.
-use rp_pico::hal;
+// Some traits we need
+use embedded_hal::digital::v2::ToggleableOutputPin;
 
-// USB Device support
-use usb_device::{class_prelude::*, prelude::*};
+// Our interrupt macro
+use hal::pac::interrupt;
 
-// USB Human Interface Device (HID) Class support
-use usbd_hid::descriptor::generator_prelude::*;
-use usbd_hid::descriptor::MouseReport;
-use usbd_hid::hid_class::HIDClass;
+// Some short-cuts to useful types
+use core::cell::RefCell;
+use critical_section::Mutex;
+use rp2040_hal::gpio;
 
-/// The USB Device Driver (shared with the interrupt).
-static mut USB_DEVICE: Option<UsbDevice<hal::usb::UsbBus>> = None;
+// The GPIO interrupt type we're going to generate
+use rp2040_hal::gpio::Interrupt::EdgeHigh;
 
-/// The USB Bus Driver (shared with the interrupt).
-static mut USB_BUS: Option<UsbBusAllocator<hal::usb::UsbBus>> = None;
+/// The linker will place this boot block at the start of our program image. We
+/// need this to help the ROM bootloader get our code up and running.
+/// Note: This boot block is not necessary when using a rp-hal based BSP
+/// as the BSPs already perform this step.
+#[link_section = ".boot2"]
+#[used]
+pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_GENERIC_03H;
 
-/// The USB Human Interface Device Driver (shared with the interrupt).
-static mut USB_HID: Option<HIDClass<hal::usb::UsbBus>> = None;
+/// External high-speed crystal on the Raspberry Pi Pico board is 12 MHz. Adjust
+/// if your board has a different frequency
+const XTAL_FREQ_HZ: u32 = 12_000_000u32;
+
+// Pin types quickly become very long!
+// We'll create some type aliases using `type` to help with that
+
+/// This pin will be our output - it will drive an LED if you run this on a Pico
+type LedPin = gpio::Pin<gpio::bank0::Gpio25, gpio::PushPullOutput>;
+
+/// This pin will be our interrupt source.
+/// It will trigger an interrupt if pulled to ground (via a switch or jumper wire)
+type ButtonPin = gpio::Pin<gpio::bank0::Gpio19, gpio::PullUpInput>;
+
+/// Since we're always accessing these pins together we'll store them in a tuple.
+/// Giving this tuple a type alias means we won't need to use () when putting them
+/// inside an Option. That will be easier to read.
+type LedAndButton = (LedPin, ButtonPin);
+
+/// This how we transfer our Led and Button pins into the Interrupt Handler.
+/// We'll have the option hold both using the LedAndButton type.
+/// This will make it a bit easier to unpack them later.
+static GLOBAL_PINS: Mutex<RefCell<Option<LedAndButton>>> = Mutex::new(RefCell::new(None));
+
+mod debounce;
 
 /// Entry point to our bare-metal application.
 ///
-/// The `#[entry]` macro ensures the Cortex-M start-up code calls this function
-/// as soon as all global variables are initialised.
+/// The `#[rp2040_hal::entry]` macro ensures the Cortex-M start-up code calls this function
+/// as soon as all global variables and the spinlock are initialised.
 ///
-/// The function configures the RP2040 peripherals, then submits cursor movement
-/// updates periodically.
-#[entry]
+/// The function configures the RP2040 peripherals, then toggles a GPIO pin in
+/// an infinite loop. If there is an LED connected to that pin, it will blink.
+#[rp2040_hal::entry]
 fn main() -> ! {
     // Grab our singleton objects
     let mut pac = pac::Peripherals::take().unwrap();
@@ -55,10 +77,8 @@ fn main() -> ! {
     let mut watchdog = hal::Watchdog::new(pac.WATCHDOG);
 
     // Configure the clocks
-    //
-    // The default is to generate a 125 MHz system clock
-    let clocks = hal::clocks::init_clocks_and_plls(
-        rp_pico::XOSC_CRYSTAL_FREQ,
+    let _clocks = hal::clocks::init_clocks_and_plls(
+        XTAL_FREQ_HZ,
         pac.XOSC,
         pac.CLOCKS,
         pac.PLL_SYS,
@@ -69,106 +89,74 @@ fn main() -> ! {
     .ok()
     .unwrap();
 
-    #[cfg(feature = "rp2040-e5")]
-    {
-        let sio = hal::Sio::new(pac.SIO);
-        let _pins = rp_pico::Pins::new(
-            pac.IO_BANK0,
-            pac.PADS_BANK0,
-            sio.gpio_bank0,
-            &mut pac.RESETS,
-        );
-    }
+    // The single-cycle I/O block controls our GPIO pins
+    let sio = hal::Sio::new(pac.SIO);
 
-    // Set up the USB driver
-    let usb_bus = UsbBusAllocator::new(hal::usb::UsbBus::new(
-        pac.USBCTRL_REGS,
-        pac.USBCTRL_DPRAM,
-        clocks.usb_clock,
-        true,
+    // Set the pins to their default state
+    let pins = hal::gpio::Pins::new(
+        pac.IO_BANK0,
+        pac.PADS_BANK0,
+        sio.gpio_bank0,
         &mut pac.RESETS,
-    ));
+    );
+
+    // Setup pins
+    let led = pins.gpio25.into_mode();
+    let in_pin = pins.gpio19.into_mode();
+
+    // Trigger on the 'falling edge' of the input pin.
+    // This will happen as the button is being pressed
+    in_pin.set_interrupt_enabled(EdgeHigh, true);
+
+    // Give away our pins by moving them into the `GLOBAL_PINS` variable.
+    // We won't need to access them in the main thread again
+    critical_section::with(|cs| {
+        GLOBAL_PINS.borrow(cs).replace(Some((led, in_pin)));
+    });
+
+    // Unmask the IO_BANK0 IRQ so that the NVIC interrupt controller
+    // will jump to the interrupt function when the interrupt occurs.
+    // We do this last so that the interrupt can't go off while
+    // it is in the middle of being configured
     unsafe {
-        // Note (safety): This is safe as interrupts haven't been started yet
-        USB_BUS = Some(usb_bus);
+        pac::NVIC::unmask(pac::Interrupt::IO_IRQ_BANK0);
     }
 
-    // Grab a reference to the USB Bus allocator. We are promising to the
-    // compiler not to take mutable access to this global variable whilst this
-    // reference exists!
-    let bus_ref = unsafe { USB_BUS.as_ref().unwrap() };
-
-    // Set up the USB HID Class Device driver, providing Mouse Reports
-    let usb_hid = HIDClass::new(bus_ref, MouseReport::desc(), 60);
-    unsafe {
-        // Note (safety): This is safe as interrupts haven't been started yet.
-        USB_HID = Some(usb_hid);
-    }
-
-    // Create a USB device with a fake VID and PID
-    let usb_dev = UsbDeviceBuilder::new(bus_ref, UsbVidPid(0x16c0, 0x27da))
-        .manufacturer("Fake company")
-        .product("Twitchy Mousey")
-        .serial_number("TEST")
-        .device_class(0)
-        .build();
-    unsafe {
-        // Note (safety): This is safe as interrupts haven't been started yet
-        USB_DEVICE = Some(usb_dev);
-    }
-
-    unsafe {
-        // Enable the USB interrupt
-        pac::NVIC::unmask(hal::pac::Interrupt::USBCTRL_IRQ);
-    };
-    let core = pac::CorePeripherals::take().unwrap();
-    let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
-
-    // Move the cursor up and down every 200ms
     loop {
-        delay.delay_ms(100);
-
-        let rep_up = MouseReport {
-            x: 0,
-            y: 4,
-            buttons: 0,
-            wheel: 0,
-            pan: 0,
-        };
-        push_mouse_movement(rep_up).ok().unwrap_or(0);
-
-        delay.delay_ms(100);
-
-        let rep_down = MouseReport {
-            x: 0,
-            y: -4,
-            buttons: 0,
-            wheel: 0,
-            pan: 0,
-        };
-        push_mouse_movement(rep_down).ok().unwrap_or(0);
+        // interrupts handle everything else in this example.
+        cortex_m::asm::wfi();
     }
 }
 
-/// Submit a new mouse movement report to the USB stack.
-///
-/// We do this with interrupts disabled, to avoid a race hazard with the USB IRQ.
-fn push_mouse_movement(report: MouseReport) -> Result<usize, usb_device::UsbError> {
-    critical_section::with(|_| unsafe {
-        // Now interrupts are disabled, grab the global variable and, if
-        // available, send it a HID report
-        USB_HID.as_mut().map(|hid| hid.push_input(&report))
-    })
-    .unwrap()
-}
-
-/// This function is called whenever the USB Hardware generates an Interrupt
-/// Request.
-#[allow(non_snake_case)]
 #[interrupt]
-unsafe fn USBCTRL_IRQ() {
-    // Handle USB request
-    let usb_dev = USB_DEVICE.as_mut().unwrap();
-    let usb_hid = USB_HID.as_mut().unwrap();
-    usb_dev.poll(&mut [usb_hid]);
+fn IO_IRQ_BANK0() {
+    // The `#[interrupt]` attribute covertly converts this to `&'static mut Option<LedAndButton>`
+    static mut LED_AND_BUTTON: Option<LedAndButton> = None;
+
+    // This is one-time lazy initialisation. We steal the variables given to us
+    // via `GLOBAL_PINS`.
+    if LED_AND_BUTTON.is_none() {
+        critical_section::with(|cs| {
+            *LED_AND_BUTTON = GLOBAL_PINS.borrow(cs).take();
+        });
+    }
+
+    // Need to check if our Option<LedAndButtonPins> contains our pins
+    if let Some(gpios) = LED_AND_BUTTON {
+        // borrow led and button by *destructuring* the tuple
+        // these will be of type `&mut LedPin` and `&mut ButtonPin`, so we don't have
+        // to move them back into the static after we use them
+        let (led, button) = gpios;
+        // Check if the interrupt source is from the pushbutton going from high-to-low.
+        // Note: this will always be true in this example, as that is the only enabled GPIO interrupt source
+        if button.interrupt_status(EdgeHigh) {
+            // toggle can't fail, but the embedded-hal traits always allow for it
+            // we can discard the return value by assigning it to an unnamed variable
+            let _ = led.toggle();
+
+            // Our interrupt doesn't clear itself.
+            // Do that now so we don't immediately jump back to this interrupt handler.
+            button.clear_interrupt(EdgeHigh);
+        }
+    }
 }
