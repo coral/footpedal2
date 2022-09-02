@@ -35,7 +35,7 @@ impl Device {
             .manufacturer("BIG CHUNGUS")
             .product("FOOTPEDAL2")
             .serial_number("053531217003516867")
-            .device_class(0x00)
+            .device_class(0)
             .build();
         unsafe {
             // Note (safety): This is safe as interrupts haven't been started yet
