@@ -17,12 +17,13 @@ pub struct Debouncer {
 }
 
 impl Debouncer {
+    // create a new debouncer, debounce_delay is specificed in milliseconds
     pub fn create(t: pac::TIMER, r: &mut RESETS, debounce_delay: u64) -> Debouncer {
         let timer = rp_pico::hal::timer::Timer::new(t, r);
         let init = timer.get_counter();
         Debouncer {
             timer,
-            debounce_delay,
+            debounce_delay: debounce_delay * 1000,
             lc: init,
             state: false,
         }
