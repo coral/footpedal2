@@ -52,15 +52,26 @@ fn main() -> ! {
     let button_pin = pins.gpio19.into_pull_up_input();
 
     //Initalize debouncer
-    let deb = debounce::Debouncer::create(pac.TIMER, &mut pac.RESETS, 100);
+    let mut deb = debounce::Debouncer::create(pac.TIMER, &mut pac.RESETS, 1000);
 
     loop {
-        if button_pin.is_high().unwrap() {
-            led_pin.set_high().unwrap();
-            device::Device::action(true, MOUSE_BUTTON);
-        } else {
-            led_pin.set_low().unwrap();
-            device::Device::action(false, MOUSE_BUTTON);
+        match deb.process(button_pin.is_high().unwrap()) {
+            debounce::DebounceResult::NoChange => {}
+            debounce::DebounceResult::Pressed => {
+                led_pin.set_high().unwrap();
+                device::Device::action(true, MOUSE_BUTTON);
+            }
+            debounce::DebounceResult::Released => {
+                led_pin.set_low().unwrap();
+                device::Device::action(false, MOUSE_BUTTON);
+            }
         }
+        // if button_pin.is_high().unwrap() {
+        //     led_pin.set_high().unwrap();
+        //     device::Device::action(true, MOUSE_BUTTON);
+        // } else {
+        //     led_pin.set_low().unwrap();
+        //     device::Device::action(false, MOUSE_BUTTON);
+        // }
     }
 }

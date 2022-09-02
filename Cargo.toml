@@ -16,7 +16,6 @@ usb-device = "0.2.9"
 usbd-hid = "0.6.0"
 critical-section = "1.1.0"
 rp2040-hal = { version="0.6", features=["rt"] }
-fugit = "0.3.6"
 
 # cargo build/run
 [profile.dev]

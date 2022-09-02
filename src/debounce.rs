@@ -1,5 +1,3 @@
-use embedded_hal::timer;
-use fugit::{MicrosDurationU32, MicrosDurationU64, TimerInstantU64};
 use rp_pico::pac;
 use rp_pico::pac::*;
 
@@ -13,18 +11,42 @@ pub enum DebounceResult {
 
 pub struct Debouncer {
     timer: rp2040_hal::timer::Timer,
-    release: u64,
+    lc: u64,
+    debounce_delay: u64,
+    state: bool,
 }
 
 impl Debouncer {
-    pub fn create(t: pac::TIMER, r: &mut RESETS, release: u64) -> Debouncer {
+    pub fn create(t: pac::TIMER, r: &mut RESETS, debounce_delay: u64) -> Debouncer {
+        let timer = rp_pico::hal::timer::Timer::new(t, r);
+        let init = timer.get_counter();
         Debouncer {
-            timer: rp_pico::hal::timer::Timer::new(t, r),
-            release,
+            timer,
+            debounce_delay,
+            lc: init,
+            state: false,
         }
     }
 
-    pub fn debounce(value: bool) -> bool {
-        return false;
+    pub fn process(&mut self, value: bool) -> DebounceResult {
+        let mt = self.timer.get_counter();
+
+        if (self.lc + self.debounce_delay) > mt {
+            return DebounceResult::NoChange;
+        }
+
+        self.lc = mt;
+
+        if value != self.state {
+            self.state = value;
+
+            if self.state {
+                return DebounceResult::Pressed;
+            } else {
+                return DebounceResult::Released;
+            }
+        }
+
+        return DebounceResult::NoChange;
     }
 }
