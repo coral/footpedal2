@@ -1,4 +1,6 @@
+use embedded_hal::timer;
 use fugit::{MicrosDurationU32, MicrosDurationU64, TimerInstantU64};
+use rp_pico::pac;
 
 #[repr(u8)]
 #[derive(PartialEq)]
@@ -8,23 +10,20 @@ pub enum DebounceResult {
     Released,
 }
 
-pub type Instant = TimerInstantU64<1_000_000>;
+pub struct Debouncer {
+    t: rp2040_hal::timer::Timer,
 
-fn get_counter(timer: &crate::pac::timer::RegisterBlock) -> Instant {
-    let mut hi0 = timer.timerawh.read().bits();
-    let timestamp = loop {
-        let low = timer.timerawl.read().bits();
-        let hi1 = timer.timerawh.read().bits();
-        if hi0 == hi1 {
-            break (u64::from(hi0) << 32) | u64::from(low);
-        }
-        hi0 = hi1;
-    };
-    TimerInstantU64::from_ticks(timestamp)
+    release: u64,
 }
 
-pub struct Debouncer {}
-
 impl Debouncer {
-    pub fn create() -> Debouncer {}
+    pub fn create(t: pac::TIMER) -> Debouncer {
+        let t = rp_pico::hal::timer::Timer::new(t, pac::RESETS);
+
+        Debouncer { t, release: 100 }
+    }
+
+    pub fn debounce(value: bool) -> bool {
+        return false;
+    }
 }
