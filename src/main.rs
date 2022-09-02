@@ -7,6 +7,7 @@ use rp_pico::entry;
 use rp_pico::hal;
 use rp_pico::hal::pac;
 
+mod debounce;
 mod device;
 
 // Define the footpedal mouse button
@@ -49,6 +50,9 @@ fn main() -> ! {
     let mut led_pin = pins.led.into_push_pull_output();
     // button input
     let button_pin = pins.gpio19.into_pull_up_input();
+
+    //Initalize debouncer
+    let deb = debounce::Debouncer::create(pac.TIMER, &mut pac.RESETS, 100);
 
     loop {
         if button_pin.is_high().unwrap() {
