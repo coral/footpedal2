@@ -65,7 +65,7 @@ impl Device {
 #[interrupt]
 unsafe fn USBCTRL_IRQ() {
     // Handle USB request
-    let usb_dev = USB_DEVICE.as_mut().unwrap();
-    let usb_hid = USB_HID.as_mut().unwrap();
-    usb_dev.poll(&mut [usb_hid]);
+    if let (Some(usb_dev), Some(hid)) = (USB_DEVICE.as_mut(), USB_HID.as_mut()) {
+        usb_dev.poll(&mut [hid]);
+    }
 }

@@ -2,7 +2,7 @@
 #![no_main]
 
 use embedded_hal::digital::v2::{InputPin, OutputPin};
-use panic_halt as _;
+use panic_reset as _;
 use rp_pico::entry;
 use rp_pico::hal;
 use rp_pico::hal::pac;
@@ -13,6 +13,7 @@ mod device;
 // Define the footpedal mouse button
 const MOUSE_BUTTON: u8 = 8;
 
+#[entry]
 fn main() -> ! {
     let mut pac = pac::Peripherals::take().unwrap();
 
