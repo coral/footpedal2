@@ -48,7 +48,7 @@ impl Device {
         };
     }
 
-    pub fn action(state: bool, button: u8) {
+    pub fn action(state: bool, button: u8) -> Option<Result<usize, UsbError>> {
         let report = MouseReport {
             x: 0,
             y: 0,
@@ -58,9 +58,6 @@ impl Device {
         };
 
         critical_section::with(|_| unsafe { USB_HID.as_mut().map(|hid| hid.push_input(&report)) })
-            .unwrap()
-            .ok()
-            .unwrap_or(0);
     }
 }
 

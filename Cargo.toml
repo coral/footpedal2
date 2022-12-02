@@ -9,7 +9,7 @@ cortex-m-rt = "0.7"
 embedded-hal = { version = "0.2.5", features = ["unproven"] }
 
 defmt = "0.3"
-defmt-rtt = "0.3"
+defmt-rtt = "0.4"
 panic-probe = { version = "0.3", features = ["print-defmt"] }
 
 rp-pico = "0.5"
@@ -20,6 +20,7 @@ usb-device = "0.2.9"
 usbd-hid = "0.6.0"
 critical-section = "1.1.0"
 rp2040-hal = { version="0.6", features=["rt"] }
+panic-reset = "0.1.1"
 
 # cargo build/run
 [profile.dev]

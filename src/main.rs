@@ -13,7 +13,6 @@ mod device;
 // Define the footpedal mouse button
 const MOUSE_BUTTON: u8 = 8;
 
-#[entry]
 fn main() -> ! {
     let mut pac = pac::Peripherals::take().unwrap();
 
@@ -55,16 +54,30 @@ fn main() -> ! {
     let mut deb = debounce::Debouncer::create(pac.TIMER, &mut pac.RESETS, 10);
 
     loop {
-        match deb.process(button_pin.is_high().unwrap()) {
-            debounce::DebounceResult::NoChange => {}
+        let res = match deb.process(button_pin.is_high().unwrap()) {
+            debounce::DebounceResult::NoChange => {
+                continue;
+            }
             debounce::DebounceResult::Pressed => {
                 led_pin.set_high().unwrap();
-                device::Device::action(true, MOUSE_BUTTON);
+                device::Device::action(true, MOUSE_BUTTON)
             }
             debounce::DebounceResult::Released => {
                 led_pin.set_low().unwrap();
-                device::Device::action(false, MOUSE_BUTTON);
+                device::Device::action(false, MOUSE_BUTTON)
             }
+        };
+
+        match res.unwrap() {
+            Ok(_) => {}
+            Err(e) => match e {
+                usb_device::UsbError::WouldBlock => {
+                    continue;
+                }
+                _ => {
+                    cortex_m::peripheral::SCB::sys_reset();
+                }
+            },
         }
     }
 }
