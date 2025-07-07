@@ -1,3 +1,9 @@
+// USB HID Device Management
+// Handles USB device initialization, HID mouse reports, and device state management
+// Uses safe mutex-wrapped RefCell pattern instead of unsafe static globals
+
+use core::cell::RefCell;
+use critical_section::Mutex;
 use rp_pico::hal;
 use rp_pico::hal::clocks::UsbClock;
 use rp_pico::hal::pac;
@@ -8,9 +14,10 @@ use usbd_hid::descriptor::generator_prelude::*;
 use usbd_hid::descriptor::MouseReport;
 use usbd_hid::hid_class::HIDClass;
 
-static mut USB_DEVICE: Option<UsbDevice<hal::usb::UsbBus>> = None;
-static mut USB_BUS: Option<UsbBusAllocator<hal::usb::UsbBus>> = None;
-static mut USB_HID: Option<HIDClass<hal::usb::UsbBus>> = None;
+// Use safer mutex-wrapped RefCell instead of unsafe static mut
+static USB_DEVICE: Mutex<RefCell<Option<UsbDevice<hal::usb::UsbBus>>>> = Mutex::new(RefCell::new(None));
+static USB_BUS: Mutex<RefCell<Option<UsbBusAllocator<hal::usb::UsbBus>>>> = Mutex::new(RefCell::new(None));
+static USB_HID: Mutex<RefCell<Option<HIDClass<hal::usb::UsbBus>>>> = Mutex::new(RefCell::new(None));
 
 pub struct Device {}
 
@@ -18,18 +25,23 @@ impl Device {
     pub fn init(reg: USBCTRL_REGS, dpram: USBCTRL_DPRAM, c: UsbClock, r: &mut RESETS) {
         let usb_bus = UsbBusAllocator::new(hal::usb::UsbBus::new(reg, dpram, c, true, r));
 
-        unsafe {
-            // Note (safety): This is safe as interrupts haven't been started yet
-            USB_BUS = Some(usb_bus);
-        }
+        // Store the bus in the static
+        critical_section::with(|cs| {
+            USB_BUS.borrow_ref_mut(cs).replace(usb_bus);
+        });
 
-        let bus_ref = unsafe { USB_BUS.as_ref().unwrap() };
+        // Get a reference to the bus for creating other USB objects
+        let bus_ref = critical_section::with(|cs| {
+            USB_BUS.borrow_ref(cs).as_ref().unwrap() as *const UsbBusAllocator<hal::usb::UsbBus>
+        });
+
+        // SAFETY: We know the bus is valid and won't be moved
+        let bus_ref = unsafe { &*bus_ref };
 
         let usb_hid = HIDClass::new(bus_ref, MouseReport::desc(), 60);
-        unsafe {
-            // Note (safety): This is safe as interrupts haven't been started yet.
-            USB_HID = Some(usb_hid);
-        }
+        critical_section::with(|cs| {
+            USB_HID.borrow_ref_mut(cs).replace(usb_hid);
+        });
 
         let usb_dev = UsbDeviceBuilder::new(bus_ref, UsbVidPid(0x16c0, 0x27da))
             .strings(&[StringDescriptors::default()
@@ -39,10 +51,10 @@ impl Device {
             .unwrap()
             .device_class(0)
             .build();
-        unsafe {
-            // Note (safety): This is safe as interrupts haven't been started yet
-            USB_DEVICE = Some(usb_dev);
-        }
+        
+        critical_section::with(|cs| {
+            USB_DEVICE.borrow_ref_mut(cs).replace(usb_dev);
+        });
 
         unsafe {
             // Enable the USB interrupt
@@ -59,15 +71,27 @@ impl Device {
             pan: 0,
         };
 
-        critical_section::with(|_| unsafe { USB_HID.as_mut().map(|hid| hid.push_input(&report)) })
+        critical_section::with(|cs| {
+            USB_HID.borrow_ref_mut(cs).as_mut().map(|hid| hid.push_input(&report))
+        })
+    }
+
+    pub fn get_state() -> Option<UsbDeviceState> {
+        critical_section::with(|cs| {
+            USB_DEVICE.borrow_ref(cs).as_ref().map(|dev| dev.state())
+        })
     }
 }
 
 #[allow(non_snake_case)]
 #[interrupt]
-unsafe fn USBCTRL_IRQ() {
-    // Handle USB request
-    if let (Some(usb_dev), Some(hid)) = (USB_DEVICE.as_mut(), USB_HID.as_mut()) {
-        usb_dev.poll(&mut [hid]);
-    }
+fn USBCTRL_IRQ() {
+    critical_section::with(|cs| {
+        let mut usb_device = USB_DEVICE.borrow_ref_mut(cs);
+        let mut usb_hid = USB_HID.borrow_ref_mut(cs);
+        
+        if let (Some(usb_dev), Some(hid)) = (usb_device.as_mut(), usb_hid.as_mut()) {
+            usb_dev.poll(&mut [hid]);
+        }
+    });
 }

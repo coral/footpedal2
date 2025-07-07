@@ -1,5 +1,7 @@
 oofergang
 
+yes I used AI slop to improve this code 3 years after I wrote it. I'm not ashamed.
+
 ## install
 
 ```

@@ -11,9 +11,10 @@ pub enum DebounceResult {
 
 pub struct Debouncer {
     timer: rp_pico::hal::timer::Timer,
-    lc: u64,
+    last_change_time: u64,
     debounce_delay: u64,
-    state: bool,
+    stable_state: bool,
+    last_input: bool,
 }
 
 impl Debouncer {
@@ -29,24 +30,31 @@ impl Debouncer {
         Debouncer {
             timer,
             debounce_delay: debounce_delay * 1000,
-            lc: init,
-            state: false,
+            last_change_time: init,
+            stable_state: false,
+            last_input: false,
         }
     }
 
     pub fn process(&mut self, value: bool) -> DebounceResult {
-        let mt = self.timer.get_counter().ticks();
+        let now = self.timer.get_counter().ticks();
 
-        if (self.lc + self.debounce_delay) > mt {
+        // If input changed, reset the timer
+        if value != self.last_input {
+            self.last_input = value;
+            self.last_change_time = now;
             return DebounceResult::NoChange;
         }
 
-        self.lc = mt;
+        // If debounce period hasn't elapsed, no change
+        if (self.last_change_time + self.debounce_delay) > now {
+            return DebounceResult::NoChange;
+        }
 
-        if value != self.state {
-            self.state = value;
-
-            if self.state {
+        // Input has been stable for debounce period - check if state changed
+        if value != self.stable_state {
+            self.stable_state = value;
+            if self.stable_state {
                 return DebounceResult::Pressed;
             } else {
                 return DebounceResult::Released;
