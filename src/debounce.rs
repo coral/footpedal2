@@ -10,7 +10,7 @@ pub enum DebounceResult {
 }
 
 pub struct Debouncer {
-    timer: rp2040_hal::timer::Timer,
+    timer: rp_pico::hal::timer::Timer,
     lc: u64,
     debounce_delay: u64,
     state: bool,
@@ -18,9 +18,14 @@ pub struct Debouncer {
 
 impl Debouncer {
     // create a new debouncer, debounce_delay is specificed in milliseconds
-    pub fn create(t: pac::TIMER, r: &mut RESETS, debounce_delay: u64) -> Debouncer {
-        let timer = rp_pico::hal::timer::Timer::new(t, r);
-        let init = timer.get_counter();
+    pub fn create(
+        t: pac::TIMER,
+        r: &mut RESETS,
+        clocks: &rp_pico::hal::clocks::ClocksManager,
+        debounce_delay: u64,
+    ) -> Debouncer {
+        let timer = rp_pico::hal::timer::Timer::new(t, r, clocks);
+        let init = timer.get_counter().ticks();
         Debouncer {
             timer,
             debounce_delay: debounce_delay * 1000,
@@ -30,7 +35,7 @@ impl Debouncer {
     }
 
     pub fn process(&mut self, value: bool) -> DebounceResult {
-        let mt = self.timer.get_counter();
+        let mt = self.timer.get_counter().ticks();
 
         if (self.lc + self.debounce_delay) > mt {
             return DebounceResult::NoChange;

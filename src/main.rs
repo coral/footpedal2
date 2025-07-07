@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-use embedded_hal::digital::v2::{InputPin, OutputPin};
+use embedded_hal::digital::{InputPin, OutputPin};
 use panic_reset as _;
 use rp_pico::entry;
 use rp_pico::hal;
@@ -30,6 +30,9 @@ fn main() -> ! {
     .ok()
     .unwrap();
 
+    //Initalize debouncer
+    let mut deb = debounce::Debouncer::create(pac.TIMER, &mut pac.RESETS, &clocks, 10);
+
     device::Device::init(
         pac.USBCTRL_REGS,
         pac.USBCTRL_DPRAM,
@@ -49,10 +52,7 @@ fn main() -> ! {
     // onboard led
     let mut led_pin = pins.led.into_push_pull_output();
     // button input
-    let button_pin = pins.gpio19.into_pull_up_input();
-
-    //Initalize debouncer
-    let mut deb = debounce::Debouncer::create(pac.TIMER, &mut pac.RESETS, 10);
+    let mut button_pin = pins.gpio19.into_pull_up_input();
 
     loop {
         let res = match deb.process(button_pin.is_high().unwrap()) {

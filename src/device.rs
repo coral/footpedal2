@@ -1,5 +1,5 @@
-use rp2040_hal::clocks::UsbClock;
 use rp_pico::hal;
+use rp_pico::hal::clocks::UsbClock;
 use rp_pico::hal::pac;
 use rp_pico::pac::*;
 
@@ -32,9 +32,11 @@ impl Device {
         }
 
         let usb_dev = UsbDeviceBuilder::new(bus_ref, UsbVidPid(0x16c0, 0x27da))
-            .manufacturer("BIG CHUNGUS")
-            .product("FOOTPEDAL2")
-            .serial_number("053531217003516867")
+            .strings(&[StringDescriptors::default()
+                .manufacturer("BIG CHUNGUS")
+                .product("FOOTPEDAL2")
+                .serial_number("053531217003516867")])
+            .unwrap()
             .device_class(0)
             .build();
         unsafe {
