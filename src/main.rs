@@ -1,3 +1,4 @@
+// UHHHHHHHH
 #![no_std]
 #![no_main]
 
@@ -75,7 +76,21 @@ fn main() -> ! {
                 usb_device::UsbError::WouldBlock => {
                     continue;
                 }
-                _ => {
+                usb_device::UsbError::ParseError | 
+                usb_device::UsbError::InvalidState |
+                usb_device::UsbError::BufferOverflow => {
+                    // These are common during host sleep/wake transitions - just continue
+                    continue;
+                }
+                usb_device::UsbError::EndpointOverflow |
+                usb_device::UsbError::EndpointMemoryOverflow |
+                usb_device::UsbError::InvalidEndpoint => {
+                    // These indicate more serious issues but may be recoverable
+                    // during host sleep/wake cycles - try to continue
+                    continue;
+                }
+                usb_device::UsbError::Unsupported => {
+                    // This is likely a permanent error - reset
                     cortex_m::peripheral::SCB::sys_reset();
                 }
             },
